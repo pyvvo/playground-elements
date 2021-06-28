@@ -91,19 +91,25 @@ export const classifySpecifier = (
   return 'bare';
 };
 
+export interface NpmFileLocation {
+  pkg: string;
+  version: string;
+  path: string;
+}
+
 /**
  * Parse the given module import specifier using format
  * "<pkg>[@<version>][/<path>]".
  *
  * E.g. given "foo@^1.2.3/bar.js" return {
  *   pkg: "foo",
- *   range: "^1.2.3",
+ *   version: "^1.2.3",
  *   path: "bar.js"
  * }
  */
 export const parseNpmStyleSpecifier = (
   specifier: string
-): {pkg: string; version: string; path: string} | undefined => {
+): NpmFileLocation | undefined => {
   const match = specifier.match(
     /^((?:@[^\/@]+\/)?[^\/\@]+)(?:@([^\/]+))?\/?(.*)$/
   );
@@ -163,3 +169,12 @@ export const charToLineAndChar = (
   }
   return {line, character};
 };
+
+export interface PackageJson {
+  version?: string;
+  main?: string;
+  module?: string;
+  types?: string;
+  typings?: string;
+  dependencies?: {[key: string]: string};
+}
