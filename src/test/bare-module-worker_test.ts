@@ -6,7 +6,11 @@
 
 import {checkTransform} from './worker-test-util.js';
 
-import type {BuildOutput, SampleFile} from '../shared/worker-api.js';
+import type {
+  BuildOutput,
+  ModuleImportMap,
+  SampleFile,
+} from '../shared/worker-api.js';
 import type {CdnData} from './fake-cdn-plugin.js';
 
 suite('bare module builder', () => {
@@ -1027,5 +1031,42 @@ suite('bare module builder', () => {
       },
     ];
     await checkTransform(files, expected, {}, cdn);
+  });
+
+  test('use import map', async () => {
+    const files: SampleFile[] = [
+      {
+        name: 'index.js',
+        content: 'import "foo";',
+      },
+    ];
+    const importMap: ModuleImportMap = {
+      imports: {
+        foo: 'http://example.com/foo',
+      },
+    };
+    const cdn: CdnData = {
+      foo: {
+        versions: {
+          '1.0.0': {
+            files: {
+              'index.js': {
+                content: 'foo',
+              },
+            },
+          },
+        },
+      },
+    };
+    const expected: BuildOutput[] = [
+      {
+        kind: 'file',
+        file: {
+          name: 'index.js',
+          content: 'import "http://example.com/foo";',
+        },
+      },
+    ];
+    await checkTransform(files, expected, importMap, cdn);
   });
 });

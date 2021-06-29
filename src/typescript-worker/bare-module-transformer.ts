@@ -27,12 +27,12 @@ import type {CachingCdn} from './cdn.js';
 import type {NpmFileLocation, PackageJson} from './util.js';
 
 export class BareModuleTransformer {
-  // private _moduleResolver: ModuleResolver;
+  private _moduleResolver: ModuleResolver;
   private _cdn: CachingCdn;
   private _alreadyHandled = new Set<string>();
 
-  constructor(_moduleResolver: ModuleResolver, cdn: CachingCdn) {
-    // this._moduleResolver = moduleResolver;
+  constructor(moduleResolver: ModuleResolver, cdn: CachingCdn) {
+    this._moduleResolver = moduleResolver;
     this._cdn = cdn;
   }
 
@@ -149,6 +149,10 @@ export class BareModuleTransformer {
     getPackageJson: () => Promise<PackageJson | undefined>,
     merged: MergedAsyncIterables<BuildOutput>
   ): Promise<string> {
+    const fromImportMap = this._moduleResolver.resolveUsingImportMap(specifier);
+    if (fromImportMap !== null) {
+      return fromImportMap;
+    }
     const kind = classifySpecifier(specifier);
     if (kind === 'url') {
       return specifier;
