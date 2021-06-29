@@ -13,6 +13,7 @@ export interface CdnFile {
   contentType: string;
 }
 
+// TODO(aomarks) Add defers for file and version caching.
 export class CachingCdn {
   private readonly _urlPrefix: string;
   private readonly _versionCache = new Map<string, string>();

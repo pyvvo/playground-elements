@@ -897,4 +897,135 @@ suite('bare module builder', () => {
     ];
     await checkTransform(files, expected, {}, cdn);
   });
+
+  test('relative import with no extension', async () => {
+    const files: SampleFile[] = [
+      {
+        name: 'index.js',
+        content: 'import "foo";',
+      },
+    ];
+    const cdn: CdnData = {
+      foo: {
+        versions: {
+          '1.0.0': {
+            files: {
+              'index.js': {
+                content: 'import "./bar";',
+              },
+              'bar.js': {
+                content: 'bar',
+              },
+            },
+          },
+        },
+      },
+    };
+    const expected: BuildOutput[] = [
+      {
+        kind: 'file',
+        file: {
+          name: 'index.js',
+          content: 'import "./node_modules/foo@1.0.0/index.js";',
+        },
+      },
+      {
+        kind: 'file',
+        file: {
+          name: 'node_modules/foo@1.0.0/index.js',
+          content: 'import "./bar.js";',
+          contentType: 'text/javascript; charset=utf-8',
+        },
+      },
+      {
+        kind: 'file',
+        file: {
+          name: 'node_modules/foo@1.0.0/bar.js',
+          content: 'bar',
+          contentType: 'text/javascript; charset=utf-8',
+        },
+      },
+    ];
+    await checkTransform(files, expected, {}, cdn);
+  });
+
+  test('relative import with no extension, not latest version', async () => {
+    const files: SampleFile[] = [
+      {
+        name: 'index.js',
+        content: 'import "foo";',
+      },
+      {
+        name: 'package.json',
+        content: `{
+          "dependencies": {
+            "foo": "^1.0.0"
+          }
+        }`,
+      },
+    ];
+    const cdn: CdnData = {
+      foo: {
+        versions: {
+          '1.0.0': {
+            files: {
+              'index.js': {
+                content: 'import "./bar";',
+              },
+              'bar.js': {
+                content: 'bar1',
+              },
+            },
+          },
+          '2.0.0': {
+            files: {
+              'index.js': {
+                content: 'import "./bar";',
+              },
+              'bar.js': {
+                content: 'bar2',
+              },
+            },
+          },
+        },
+      },
+    };
+    const expected: BuildOutput[] = [
+      {
+        kind: 'file',
+        file: {
+          name: 'index.js',
+          content: 'import "./node_modules/foo@1.0.0/index.js";',
+        },
+      },
+      {
+        kind: 'file',
+        file: {
+          name: 'package.json',
+          content: `{
+          "dependencies": {
+            "foo": "^1.0.0"
+          }
+        }`,
+        },
+      },
+      {
+        kind: 'file',
+        file: {
+          name: 'node_modules/foo@1.0.0/index.js',
+          content: 'import "./bar.js";',
+          contentType: 'text/javascript; charset=utf-8',
+        },
+      },
+      {
+        kind: 'file',
+        file: {
+          name: 'node_modules/foo@1.0.0/bar.js',
+          content: 'bar1',
+          contentType: 'text/javascript; charset=utf-8',
+        },
+      },
+    ];
+    await checkTransform(files, expected, {}, cdn);
+  });
 });

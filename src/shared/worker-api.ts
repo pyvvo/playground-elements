@@ -65,7 +65,10 @@ export interface ServiceWorkerAPI {
 export interface TypeScriptWorkerAPI {
   compileProject(
     files: Array<SampleFile>,
-    importMap: ModuleImportMap,
+    config: {
+      importMap: ModuleImportMap;
+      cdnBaseUrl?: string;
+    },
     emit: (result: BuildOutput) => void
   ): Promise<void>;
 }

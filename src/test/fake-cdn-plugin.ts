@@ -70,7 +70,7 @@ export function fakeCdnPlugin(): TestRunnerPlugin {
       return false;
     },
 
-    serve(ctx) {
+    async serve(ctx) {
       if (!ctx.path.startsWith(pathPrefix)) {
         return undefined;
       }
