@@ -10,6 +10,8 @@ import {ModuleResolver} from './module-resolver.js';
 
 import type * as lsp from 'vscode-languageserver';
 import type {SampleFile, BuildOutput} from '../shared/worker-api.js';
+import type {PackageJson} from './util.js';
+import type {CachingCdn} from './cdn.js';
 
 const compilerOptions = {
   target: ts.ScriptTarget.ES2017,
@@ -32,21 +34,32 @@ const compilerOptions = {
  * common lib files like lit-element, lib.d.ts and dom.d.ts.
  */
 export class TypeScriptBuilder {
-  private _moduleResolver: ModuleResolver;
+  private readonly _cdn: CachingCdn;
+  private readonly _moduleResolver: ModuleResolver;
 
-  constructor(moduleResolver: ModuleResolver) {
+  constructor(moduleResolver: ModuleResolver, cdn: CachingCdn) {
+    this._cdn = cdn;
     this._moduleResolver = moduleResolver;
   }
 
   async *process(
     results: AsyncIterable<BuildOutput> | Iterable<BuildOutput>
   ): AsyncIterable<BuildOutput> {
+    let packageJson: PackageJson | undefined = undefined;
     const compilerInputs = [];
     for await (const result of results) {
       if (result.kind === 'file' && result.file.name.endsWith('.ts')) {
         compilerInputs.push(result.file);
       } else {
         yield result;
+        if (result.kind === 'file' && result.file.name === 'package.json') {
+          try {
+            packageJson = JSON.parse(result.file.content) as PackageJson;
+          } catch (e) {
+            // TODO(aomarks) Diagnostic?
+            console.error(`Invalid package.json: ${e}`);
+          }
+        }
       }
     }
 
@@ -57,17 +70,18 @@ export class TypeScriptBuilder {
     // Immediately resolve local project files, and begin fetching types (but
     // don't wait for them).
     const loadedFiles = new Map<string, string>();
-    const typesFetcher = new TypesFetcher(this._moduleResolver);
+    const typesFetcher = new TypesFetcher(this._cdn, this._moduleResolver);
     const inputFiles = compilerInputs.map((file) => ({
       file,
       url: new URL(file.name, self.origin).href,
     }));
+    const getPackageJson = async () => packageJson;
     for (const {file, url} of inputFiles) {
       loadedFiles.set(url, file.content);
-      typesFetcher.addBareModuleTypings(file.content);
+      typesFetcher.addBareModuleTypings(file.content, getPackageJson);
     }
     for (const lib of compilerOptions.lib) {
-      typesFetcher.addLibTypings(lib);
+      typesFetcher.addLibTypings(lib, getPackageJson);
     }
 
     // Fast initial compile for JS emit and syntax errors.

@@ -16,12 +16,15 @@ import {
 } from './util.js';
 
 import type {Result} from '../shared/util.js';
+import type {CachingCdn} from './cdn.js';
 
 /**
  * Fetches typings for TypeScript imports and their transitive dependencies, and
  * for standard libraries.
  */
 export class TypesFetcher {
+  // TODO(aomarks) private
+  protected readonly _cdn: CachingCdn;
   private readonly _moduleResolver: ModuleResolver;
   private readonly _entrypointTasks: Promise<void>[] = [];
   private readonly _handledSpecifiers = new Set<string>();
@@ -30,7 +33,8 @@ export class TypesFetcher {
     Deferred<Result<string, number>>
   >();
 
-  constructor(moduleResolver: ModuleResolver) {
+  constructor(cdn: CachingCdn, moduleResolver: ModuleResolver) {
+    this._cdn = cdn;
     this._moduleResolver = moduleResolver;
   }
 
@@ -43,15 +47,20 @@ export class TypesFetcher {
    * be needed in order for TypeScript to type check this file. To access the
    * results, call {@link getTypings}.
    */
-  addBareModuleTypings(sourceText: string): void {
+  addBareModuleTypings(
+    sourceText: string,
+    getPackageJson: () => Promise<PackageJson | undefined>
+  ): void {
     const fileInfo = ts.preProcessFile(sourceText, undefined, true);
     for (const {fileName: specifier} of fileInfo.importedFiles) {
       if (classifySpecifier(specifier) === 'bare') {
-        this._entrypointTasks.push(this._handleBareSpecifier(specifier));
+        this._entrypointTasks.push(
+          this._handleBareSpecifier(specifier, getPackageJson)
+        );
       }
     }
     for (const {fileName: lib} of fileInfo.libReferenceDirectives) {
-      this._entrypointTasks.push(this._addLibTypings(lib));
+      this._entrypointTasks.push(this._addLibTypings(lib, getPackageJson));
     }
   }
 
@@ -62,8 +71,11 @@ export class TypesFetcher {
    * This function returns immediately, but begins an asynchronous walk of the
    * <reference> graph. To access the results, await {@link getTypings}.
    */
-  addLibTypings(lib: string): void {
-    this._entrypointTasks.push(this._addLibTypings(lib));
+  addLibTypings(
+    lib: string,
+    getPackageJson: () => Promise<PackageJson | undefined>
+  ): void {
+    this._entrypointTasks.push(this._addLibTypings(lib, getPackageJson));
   }
 
   /**
@@ -92,35 +104,47 @@ export class TypesFetcher {
     return files;
   }
 
-  private async _addLibTypings(lib: string): Promise<void> {
+  private async _addLibTypings(
+    lib: string,
+    getPackageJson: () => Promise<PackageJson | undefined>
+  ): Promise<void> {
     await this._handleBareSpecifier(
-      `typescript/lib/lib.${lib.toLowerCase()}.js`
+      `typescript/lib/lib.${lib.toLowerCase()}.js`,
+      getPackageJson
     );
   }
 
   private async _handleBareAndRelativeSpecifiers(
     sourceText: string,
-    referrerSpecifier: NodePackage
+    referrerSpecifier: NodePackage,
+    getPackageJson: () => Promise<PackageJson | undefined>
   ): Promise<void> {
     const fileInfo = ts.preProcessFile(sourceText, undefined, true);
     const promises = [];
     for (const {fileName: specifier} of fileInfo.importedFiles) {
       const kind = classifySpecifier(specifier);
       if (kind === 'bare') {
-        promises.push(this._handleBareSpecifier(specifier));
+        promises.push(this._handleBareSpecifier(specifier, getPackageJson));
       } else if (kind === 'relative') {
         promises.push(
-          this._handleRelativeSpecifier(specifier, referrerSpecifier)
+          this._handleRelativeSpecifier(
+            specifier,
+            referrerSpecifier,
+            getPackageJson
+          )
         );
       }
     }
     for (const {fileName: lib} of fileInfo.libReferenceDirectives) {
-      promises.push(this.addLibTypings(lib));
+      promises.push(this.addLibTypings(lib, getPackageJson));
     }
     await Promise.all(promises);
   }
 
-  private async _handleBareSpecifier(bare: string): Promise<void> {
+  private async _handleBareSpecifier(
+    bare: string,
+    getPackageJson: () => Promise<PackageJson | undefined>
+  ): Promise<void> {
     if (this._handledSpecifiers.has(bare)) {
       return;
     }
@@ -132,6 +156,7 @@ export class TypesFetcher {
     const pkg = npm.pkg;
     // If there's no path, we need to discover the main module.
     let jsPath = npm.path;
+    console.log({bare, jsPath});
     if (jsPath === '') {
       const packageJson = await this._fetchPackageJson(pkg);
       if (packageJson.error !== undefined) {
@@ -157,10 +182,14 @@ export class TypesFetcher {
     if (dtsResult.error !== undefined) {
       return;
     }
-    await this._handleBareAndRelativeSpecifiers(dtsResult.result, {
-      pkg,
-      path: jsPath,
-    });
+    await this._handleBareAndRelativeSpecifiers(
+      dtsResult.result,
+      {
+        pkg,
+        path: jsPath,
+      },
+      getPackageJson
+    );
   }
 
   private _resolveBareModule(bare: string): string {
@@ -173,7 +202,8 @@ export class TypesFetcher {
 
   private async _handleRelativeSpecifier(
     relative: string,
-    referrerSpecifier: NodePackage
+    referrerSpecifier: NodePackage,
+    getPackageJson: () => Promise<PackageJson | undefined>
   ): Promise<void> {
     const ext = fileExtension(relative);
     if (ext === '') {
@@ -196,10 +226,14 @@ export class TypesFetcher {
     if (dtsResult.error !== undefined) {
       return;
     }
-    await this._handleBareAndRelativeSpecifiers(dtsResult.result, {
-      pkg: referrerSpecifier.pkg,
-      path: jsPath,
-    });
+    await this._handleBareAndRelativeSpecifiers(
+      dtsResult.result,
+      {
+        pkg: referrerSpecifier.pkg,
+        path: jsPath,
+      },
+      getPackageJson
+    );
   }
 
   private async _fetchAsset(
