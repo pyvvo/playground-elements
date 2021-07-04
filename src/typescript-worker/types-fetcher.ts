@@ -165,6 +165,7 @@ export class TypesFetcher {
     let packageJson: PackageJson | undefined = undefined;
     if (dtsPath === '') {
       try {
+        console.log(0);
         const res = await this._fetchAsset({
           pkg,
           version: npm.version,
@@ -183,6 +184,9 @@ export class TypesFetcher {
           ? changeFileExtension(packageJson.main, 'd.ts')
           : undefined) ??
         'index.d.ts';
+    } else {
+      // TODO(aomarks) Test coverage for this case.
+      dtsPath = changeFileExtension(dtsPath, 'd.ts');
     }
     const dtsSpecifier = `${pkg}@${npm.version}/${dtsPath}`;
     if (this._handledSpecifiers.has(dtsSpecifier)) {
@@ -191,6 +195,7 @@ export class TypesFetcher {
     this._handledSpecifiers.add(dtsSpecifier);
     let dtsResult;
     try {
+      console.log(1);
       dtsResult = await this._fetchAsset({
         pkg,
         version: npm.version,
@@ -240,10 +245,9 @@ export class TypesFetcher {
       // Unhandled kind of import.
       return;
     }
-    // Note the base URL doesn't matter here, we're just using the URL API to
-    // perform path resolution.
     const jsPath = relativeUrlPath(referrerSpecifier.path, relative).slice(1); // Remove the leading '/'.
     const dtsPath = changeFileExtension(jsPath, 'd.ts');
+    console.log({jsPath, dtsPath});
     const dtsSpecifier = `${referrerSpecifier.pkg}/${dtsPath}`;
     if (this._handledSpecifiers.has(dtsSpecifier)) {
       return;
@@ -251,6 +255,7 @@ export class TypesFetcher {
     this._handledSpecifiers.add(dtsSpecifier);
     let dtsResult;
     try {
+      console.log(2);
       dtsResult = await this._fetchAsset({
         pkg: referrerSpecifier.pkg,
         version: referrerSpecifier.version,
@@ -267,7 +272,7 @@ export class TypesFetcher {
       {
         pkg: referrerSpecifier.pkg,
         version: referrerSpecifier.version,
-        path: jsPath,
+        path: dtsPath,
       },
       getPackageJson
     );
@@ -285,6 +290,7 @@ export class TypesFetcher {
     this._specifierToFetchResult.set(specifier, deferred);
     let content;
     try {
+      console.log('dts fetch', location);
       const r = await this._cdn.fetch(location);
       content = r.content;
     } catch {

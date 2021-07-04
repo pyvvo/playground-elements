@@ -134,6 +134,7 @@ export class TypeScriptBuilder {
       // source files, so we need to add them to our filesystem with those
       // URLs.
       const url = new URL(`node_modules/${pkg}/${path}`, self.origin).href;
+      console.log(url);
       loadedFiles.set(url, content);
     }
     for (const {file, url} of inputFiles) {
