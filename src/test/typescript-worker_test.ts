@@ -212,7 +212,7 @@ suite('typescript builder', () => {
     await checkTransform(files, expected, {}, cdn);
   });
 
-  test.only('respects package.json dependency for semantic errors', async () => {
+  test('respects package.json dependency for semantic errors', async () => {
     const files: SampleFile[] = [
       {
         name: 'index.ts',

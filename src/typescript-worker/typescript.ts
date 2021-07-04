@@ -10,7 +10,7 @@ import {ModuleResolver} from './module-resolver.js';
 
 import type * as lsp from 'vscode-languageserver';
 import type {SampleFile, BuildOutput} from '../shared/worker-api.js';
-import type {PackageJson} from './util.js';
+import {PackageJson, parseNpmStyleSpecifier} from './util.js';
 import type {CachingCdn} from './cdn.js';
 
 const compilerOptions = {
@@ -124,10 +124,16 @@ export class TypeScriptBuilder {
     // Wait for all typings to be fetched, and then retrieve slower semantic
     // diagnostics.
     for (const [specifier, content] of await typesFetcher.getFiles()) {
+      // TODO(aomarks) What if there are multiple versions?
+      const parsed = parseNpmStyleSpecifier(specifier);
+      if (parsed === undefined) {
+        continue;
+      }
+      const {pkg, path} = parsed;
       // TypeScript is going to look for these files as paths relative to our
       // source files, so we need to add them to our filesystem with those
       // URLs.
-      const url = new URL(`node_modules/${specifier}`, self.origin).href;
+      const url = new URL(`node_modules/${pkg}/${path}`, self.origin).href;
       loadedFiles.set(url, content);
     }
     for (const {file, url} of inputFiles) {

@@ -13,19 +13,21 @@ import {
   changeFileExtension,
   classifySpecifier,
   relativeUrlPath,
+  NpmFileLocation,
 } from './util.js';
 
 import type {Result} from '../shared/util.js';
 import type {CachingCdn} from './cdn.js';
+import type {PackageJson} from './util.js';
 
 /**
  * Fetches typings for TypeScript imports and their transitive dependencies, and
  * for standard libraries.
  */
 export class TypesFetcher {
+  private readonly _cdn: CachingCdn;
   // TODO(aomarks) private
-  protected readonly _cdn: CachingCdn;
-  private readonly _moduleResolver: ModuleResolver;
+  protected readonly _moduleResolver: ModuleResolver;
   private readonly _entrypointTasks: Promise<void>[] = [];
   private readonly _handledSpecifiers = new Set<string>();
   private readonly _specifierToFetchResult = new Map<
@@ -153,16 +155,24 @@ export class TypesFetcher {
     if (npm === undefined) {
       return;
     }
+    if (!npm.version) {
+      npm.version =
+        (await getPackageJson())?.dependencies?.[npm.pkg] ?? 'latest';
+    }
     const pkg = npm.pkg;
     // If there's no path, we need to discover the main module.
     let jsPath = npm.path;
-    console.log({bare, jsPath});
     if (jsPath === '') {
-      const packageJson = await this._fetchPackageJson(pkg);
-      if (packageJson.error !== undefined) {
+      let packageJson;
+      try {
+        packageJson = await this._cdn.fetchPackageJson({
+          pkg,
+          version: npm.version,
+        });
+      } catch {
         return;
       }
-      jsPath = packageJson.result.main ?? 'index.js';
+      jsPath = packageJson.module ?? packageJson.main ?? 'index.js';
     }
     const ext = fileExtension(jsPath);
     if (ext === '') {
@@ -173,12 +183,21 @@ export class TypesFetcher {
       return;
     }
     const dtsPath = changeFileExtension(jsPath, 'd.ts');
-    const dtsSpecifier = `${pkg}/${dtsPath}`;
+    const dtsSpecifier = `${pkg}@${npm.version}/${dtsPath}`;
     if (this._handledSpecifiers.has(dtsSpecifier)) {
       return;
     }
     this._handledSpecifiers.add(dtsSpecifier);
-    const dtsResult = await this._fetchAsset(dtsSpecifier);
+    let dtsResult;
+    try {
+      dtsResult = await this._fetchAsset({
+        pkg,
+        version: npm.version,
+        path: dtsPath,
+      });
+    } catch {
+      return;
+    }
     if (dtsResult.error !== undefined) {
       return;
     }
@@ -190,14 +209,6 @@ export class TypesFetcher {
       },
       getPackageJson
     );
-  }
-
-  private _resolveBareModule(bare: string): string {
-    const result = this._moduleResolver.resolve(bare, '');
-    if (result.type !== 'bare') {
-      throw new Error(`Only expected bare module for specifier ${bare}`);
-    }
-    return result.url;
   }
 
   private async _handleRelativeSpecifier(
@@ -222,7 +233,16 @@ export class TypesFetcher {
       return;
     }
     this._handledSpecifiers.add(dtsSpecifier);
-    const dtsResult = await this._fetchAsset(dtsSpecifier);
+    let dtsResult;
+    try {
+      dtsResult = await this._fetchAsset({
+        pkg: referrerSpecifier.pkg,
+        version: 'latest',
+        path: dtsPath,
+      });
+    } catch {
+      return;
+    }
     if (dtsResult.error !== undefined) {
       return;
     }
@@ -237,49 +257,27 @@ export class TypesFetcher {
   }
 
   private async _fetchAsset(
-    specifier: string
+    location: NpmFileLocation
   ): Promise<Result<string, number>> {
+    const specifier = `${location.pkg}@${location.version}/${location.path}`;
     let deferred = this._specifierToFetchResult.get(specifier);
     if (deferred !== undefined) {
       return deferred.promise;
     }
     deferred = new Deferred();
     this._specifierToFetchResult.set(specifier, deferred);
-
-    let url = this._resolveBareModule(specifier);
-    // It's common to have a module resolver that resolves to unpkg.com URLs
-    // with the ?module parameter. But ?module mode errors on .d.ts files and
-    // package.json files (anything other than .js and .html), so we have to
-    // remove that here.
-    const urlObj = new URL(url);
-    if (urlObj.host === 'unpkg.com' && urlObj.searchParams.has('module')) {
-      urlObj.searchParams.delete('module');
-      url = urlObj.href;
+    let content;
+    try {
+      const r = await this._cdn.fetch(location);
+      content = r.content;
+    } catch {
+      const err = {error: 404};
+      deferred.resolve(err);
+      return err;
     }
-    const resp = await fetch(url);
-    let result: Result<string, number>;
-    if (resp.status === 200) {
-      result = {result: await resp.text()};
-    } else {
-      result = {error: resp.status};
-    }
-    deferred.resolve(result);
-    return result;
+    deferred.resolve({result: content});
+    return {result: content};
   }
-
-  private async _fetchPackageJson(
-    pkg: string
-  ): Promise<Result<PackageJson, number>> {
-    const result = await this._fetchAsset(`${pkg}/package.json`);
-    if (result.error !== undefined) {
-      return result;
-    }
-    return {result: JSON.parse(result.result) as PackageJson};
-  }
-}
-
-interface PackageJson {
-  main?: string;
 }
 
 interface NodePackage {
