@@ -90,7 +90,6 @@ export class CachingCdn {
     }>();
     this._fileCache.set(pvp, deferred);
     const url = this._urlPrefix + pvp;
-    console.log('FETCH', url);
     const res = await fetch(url);
     const content = await res.text();
     if (res.status !== 200) {

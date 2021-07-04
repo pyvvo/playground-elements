@@ -74,6 +74,7 @@ export function fakeCdnPlugin(): TestRunnerPlugin {
       if (!ctx.path.startsWith(pathPrefix)) {
         return undefined;
       }
+      // await new Promise((resolve) => setTimeout(resolve, Math.random() * 10));
       const urlMatch = ctx.path.slice(pathPrefix.length).match(/^(\d+)\/(.*)/);
       if (urlMatch === null) {
         ctx.response.status = 404;

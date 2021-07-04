@@ -108,9 +108,10 @@ export class BareModuleTransformer {
         ),
       });
     }
-    for (let i = transforms.length - 1; i >= 0; i--) {
-      const {info, newSpecifierPromise} = transforms[i];
-      const {s: start, e: end, n: oldSpecifier, d: dynamicStart} = info;
+    for (const {
+      info: {s: start, e: end, n: oldSpecifier, d: dynamicStart},
+      newSpecifierPromise,
+    } of transforms) {
       let newSpecifier;
       try {
         newSpecifier = await newSpecifierPromise;

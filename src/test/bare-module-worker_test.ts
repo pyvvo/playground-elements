@@ -61,6 +61,62 @@ suite('bare module builder', () => {
     await checkTransform(files, expected, {}, cdn);
   });
 
+  test('multiple imports', async () => {
+    const files: SampleFile[] = [
+      {
+        name: 'index.js',
+        content: `
+          import {a} from "foo";
+          import {b} from "foo";
+          import {c} from "foo";
+        `,
+      },
+    ];
+    const cdn: CdnData = {
+      foo: {
+        versions: {
+          '1.0.0': {
+            files: {
+              'index.js': {
+                content: `
+                  export const a = 'a';
+                  export const b = 'b';
+                  export const c = 'c';
+                  `,
+              },
+            },
+          },
+        },
+      },
+    };
+    const expected: BuildOutput[] = [
+      {
+        kind: 'file',
+        file: {
+          name: 'index.js',
+          content: `
+          import {a} from "./node_modules/foo@1.0.0/index.js";
+          import {b} from "./node_modules/foo@1.0.0/index.js";
+          import {c} from "./node_modules/foo@1.0.0/index.js";
+        `,
+        },
+      },
+      {
+        kind: 'file',
+        file: {
+          name: 'node_modules/foo@1.0.0/index.js',
+          content: `
+                  export const a = 'a';
+                  export const b = 'b';
+                  export const c = 'c';
+                  `,
+          contentType: 'text/javascript; charset=utf-8',
+        },
+      },
+    ];
+    await checkTransform(files, expected, {}, cdn);
+  });
+
   test('bare module transform with subpath', async () => {
     const files: SampleFile[] = [
       {
