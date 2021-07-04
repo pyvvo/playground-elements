@@ -124,6 +124,7 @@ export class TypeScriptBuilder {
     // Wait for all typings to be fetched, and then retrieve slower semantic
     // diagnostics.
     for (const [specifier, content] of await typesFetcher.getFiles()) {
+      console.log('FILES', {specifier, content});
       // TODO(aomarks) What if there are multiple versions?
       const parsed = parseNpmStyleSpecifier(specifier);
       if (parsed === undefined) {

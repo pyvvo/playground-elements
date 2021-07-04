@@ -317,4 +317,244 @@ suite('typescript builder', () => {
     ];
     await checkTransform(files, expected, {}, cdn);
   });
+
+  test('respects package.json dependency for semantic errors', async () => {
+    const files: SampleFile[] = [
+      {
+        name: 'index.ts',
+        content: `
+          import {foo} from "foo";
+          foo(123);
+        `,
+      },
+      {
+        name: 'package.json',
+        content: `{
+          "dependencies": {
+            "foo": "^1.0.0"
+          }
+        }`,
+      },
+    ];
+    const cdn: CdnData = {
+      foo: {
+        // foo takes a string in 1.0.0, and a number in 2.0.0. We should expect
+        // an error because we depend on 1.0.0.
+        versions: {
+          '1.0.0': {
+            files: {
+              'index.js': {
+                content: 'export const foo = (s) => s;',
+              },
+              'index.d.ts': {
+                content: `
+                  import type {t} from './type.js';
+                  export declare const foo: (s: t) => t;
+                `,
+              },
+              'type.d.ts': {
+                content: `export * from 'bar';`,
+              },
+              'package.json': {
+                content: `{
+                  "dependencies": {
+                    "bar": "^1.0.0"
+                  }
+                }`,
+              },
+            },
+          },
+          '2.0.0': {
+            files: {
+              'index.js': {
+                content: 'export const foo = (n) => n;',
+              },
+              'index.d.ts': {
+                content: 'export declare const foo: (n: number) => number;',
+              },
+            },
+          },
+        },
+      },
+      bar: {
+        // foo takes a string in 1.0.0, and a number in 2.0.0. We should expect
+        // an error because we depend on 1.0.0.
+        versions: {
+          '1.0.0': {
+            files: {
+              'index.d.ts': {
+                content: `export * from './type.js';`,
+              },
+              'type.d.ts': {
+                content: `export type t = string;`,
+              },
+            },
+          },
+          '2.0.0': {
+            files: {
+              'index.d.ts': {
+                content: 'export type t = number;',
+              },
+            },
+          },
+        },
+      },
+    };
+    const expected: BuildOutput[] = [
+      {
+        diagnostic: {
+          code: 2345,
+          message:
+            "Argument of type 'number' is not assignable to parameter of type 'string'.",
+          range: {
+            end: {
+              character: 17,
+              line: 2,
+            },
+            start: {
+              character: 14,
+              line: 2,
+            },
+          },
+          severity: 1,
+          source: 'typescript',
+        },
+        filename: 'index.ts',
+        kind: 'diagnostic',
+      },
+      {
+        kind: 'file',
+        file: {
+          name: 'index.js',
+          content:
+            'import { foo } from "./node_modules/foo@1.0.0/index.js";\r\nfoo(123);\r\n',
+          contentType: 'text/javascript',
+        },
+      },
+      {
+        kind: 'file',
+        file: {
+          name: 'node_modules/foo@1.0.0/index.js',
+          content: 'export const foo = (s) => s;',
+          contentType: 'text/javascript; charset=utf-8',
+        },
+      },
+      {
+        kind: 'file',
+        file: {
+          name: 'package.json',
+          content: `{
+          "dependencies": {
+            "foo": "^1.0.0"
+          }
+        }`,
+        },
+      },
+    ];
+    await checkTransform(files, expected, {}, cdn);
+  });
+
+  test.only('finds typings from: typings, types, main, index.d.ts', async () => {
+    const wrong = {
+      content: 'export type StringType = number;',
+    };
+    const files: SampleFile[] = [
+      {
+        name: 'index.ts',
+        content: `
+          import {StringType} from "a";
+          export const str: StringType = "foo";
+        `,
+      },
+    ];
+    const cdn: CdnData = {
+      a: {
+        versions: {
+          '1.0.0': {
+            files: {
+              'package.json': {
+                content: `{
+                  "typings": "typings.d.ts",
+                  "types": "types.d.ts",
+                  "main": "main.js"
+                }`,
+              },
+              'typings.d.ts': {
+                content: 'export * from "b";',
+              },
+              'types.d.ts': wrong,
+              'main.d.ts': wrong,
+              'index.d.ts': wrong,
+            },
+          },
+        },
+      },
+      b: {
+        versions: {
+          '1.0.0': {
+            files: {
+              'package.json': {
+                content: `{
+                  "types": "types.d.ts",
+                  "main": "main.js"
+                }`,
+              },
+              'types.d.ts': {
+                content: 'export * from "c";',
+              },
+              'main.d.ts': wrong,
+              'index.d.ts': wrong,
+            },
+          },
+        },
+      },
+      c: {
+        versions: {
+          '1.0.0': {
+            files: {
+              'package.json': {
+                content: `{
+                  "main": "main.js"
+                }`,
+              },
+              'typings.d.ts': wrong,
+              'types.d.ts': wrong,
+              'main.d.ts': {
+                content: 'export * from "d";',
+              },
+              'index.d.ts': wrong,
+            },
+          },
+        },
+      },
+      d: {
+        versions: {
+          '1.0.0': {
+            files: {
+              'package.json': {
+                content: `{}`,
+              },
+              'typings.d.ts': wrong,
+              'types.d.ts': wrong,
+              'main.d.ts': wrong,
+              'index.d.ts': {
+                content: 'export type StringType = string;',
+              },
+            },
+          },
+        },
+      },
+    };
+    const expected: BuildOutput[] = [
+      {
+        kind: 'file',
+        file: {
+          name: 'index.js',
+          content: `export const str = "foo";\r\n`,
+          contentType: 'text/javascript',
+        },
+      },
+    ];
+    await checkTransform(files, expected, {}, cdn);
+  });
 });

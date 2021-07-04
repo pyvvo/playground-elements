@@ -5,6 +5,7 @@
  */
 
 import {fileExtension, parseNpmStyleSpecifier} from './util.js';
+import {Deferred} from '../shared/deferred.js';
 
 import type {NpmFileLocation, PackageJson} from './util.js';
 
@@ -19,7 +20,7 @@ export class CachingCdn {
   private readonly _versionCache = new Map<string, string>();
   private readonly _fileCache = new Map<
     string,
-    {url: string; file: {content: string; contentType: string}}
+    Deferred<{url: string; file: {content: string; contentType: string}}>
   >();
 
   constructor(urlPrefix: string) {
@@ -81,12 +82,19 @@ export class CachingCdn {
     let pvp = pkgVersionPath(location);
     const cached = this._fileCache.get(pvp);
     if (cached !== undefined) {
-      return cached;
+      return cached.promise;
     }
+    const deferred = new Deferred<{
+      url: string;
+      file: {content: string; contentType: string};
+    }>();
+    this._fileCache.set(pvp, deferred);
     const url = this._urlPrefix + pvp;
+    console.log('FETCH', url);
     const res = await fetch(url);
     const content = await res.text();
     if (res.status !== 200) {
+      // TODO(aomarks) Reject the deferred!
       throw new Error(`Unpkg ${res.status} error: ${content}`);
     }
     if (!exact) {
@@ -101,7 +109,7 @@ export class CachingCdn {
         contentType: res.headers.get('content-type') ?? 'text/plain',
       },
     };
-    this._fileCache.set(pvp, result);
+    deferred.resolve(result);
     return result;
   }
 

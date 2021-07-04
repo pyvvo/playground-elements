@@ -161,28 +161,29 @@ export class TypesFetcher {
     }
     const pkg = npm.pkg;
     // If there's no path, we need to discover the main module.
-    let jsPath = npm.path;
-    if (jsPath === '') {
-      let packageJson;
+    let dtsPath = npm.path;
+    let packageJson: PackageJson | undefined = undefined;
+    if (dtsPath === '') {
       try {
-        packageJson = await this._cdn.fetchPackageJson({
+        const res = await this._fetchAsset({
           pkg,
           version: npm.version,
+          path: 'package.json',
         });
+        if (res.error === undefined) {
+          packageJson = JSON.parse(res.result) as PackageJson;
+        }
       } catch {
         return;
       }
-      jsPath = packageJson.module ?? packageJson.main ?? 'index.js';
+      dtsPath =
+        packageJson?.typings ??
+        packageJson?.types ??
+        (packageJson?.main !== undefined
+          ? changeFileExtension(packageJson.main, 'd.ts')
+          : undefined) ??
+        'index.d.ts';
     }
-    const ext = fileExtension(jsPath);
-    if (ext === '') {
-      // No extension is presumed js.
-      jsPath += '.js';
-    } else if (ext !== 'js') {
-      // Unhandled kind of import.
-      return;
-    }
-    const dtsPath = changeFileExtension(jsPath, 'd.ts');
     const dtsSpecifier = `${pkg}@${npm.version}/${dtsPath}`;
     if (this._handledSpecifiers.has(dtsSpecifier)) {
       return;
@@ -201,14 +202,28 @@ export class TypesFetcher {
     if (dtsResult.error !== undefined) {
       return;
     }
+    let packageJson2: PackageJson | undefined | null = null;
+    const getPackageJson2 = async (): Promise<PackageJson | undefined> => {
+      if (packageJson2 === null) {
+        try {
+          packageJson2 = await this._cdn.fetchPackageJson({
+            pkg,
+            version: npm.version,
+          });
+        } catch {
+          packageJson2 = undefined;
+        }
+      }
+      return packageJson2;
+    };
     await this._handleBareAndRelativeSpecifiers(
       dtsResult.result,
       {
         pkg,
         version: npm.version,
-        path: jsPath,
+        path: dtsPath,
       },
-      getPackageJson
+      getPackageJson2
     );
   }
 
