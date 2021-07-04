@@ -241,7 +241,13 @@ suite('typescript builder', () => {
                 content: 'export const foo = (s) => s;',
               },
               'index.d.ts': {
-                content: 'export declare const foo: (s: string) => string;',
+                content: `
+                  import type {t} from './type.js';
+                  export declare const foo: (s: t) => t;
+                `,
+              },
+              'type.d.ts': {
+                content: `export type t = string;`,
               },
             },
           },

@@ -118,7 +118,7 @@ export class TypesFetcher {
 
   private async _handleBareAndRelativeSpecifiers(
     sourceText: string,
-    referrerSpecifier: NodePackage,
+    referrerSpecifier: NpmFileLocation,
     getPackageJson: () => Promise<PackageJson | undefined>
   ): Promise<void> {
     const fileInfo = ts.preProcessFile(sourceText, undefined, true);
@@ -205,6 +205,7 @@ export class TypesFetcher {
       dtsResult.result,
       {
         pkg,
+        version: npm.version,
         path: jsPath,
       },
       getPackageJson
@@ -213,7 +214,7 @@ export class TypesFetcher {
 
   private async _handleRelativeSpecifier(
     relative: string,
-    referrerSpecifier: NodePackage,
+    referrerSpecifier: NpmFileLocation,
     getPackageJson: () => Promise<PackageJson | undefined>
   ): Promise<void> {
     const ext = fileExtension(relative);
@@ -237,7 +238,7 @@ export class TypesFetcher {
     try {
       dtsResult = await this._fetchAsset({
         pkg: referrerSpecifier.pkg,
-        version: 'latest',
+        version: referrerSpecifier.version,
         path: dtsPath,
       });
     } catch {
@@ -250,6 +251,7 @@ export class TypesFetcher {
       dtsResult.result,
       {
         pkg: referrerSpecifier.pkg,
+        version: referrerSpecifier.version,
         path: jsPath,
       },
       getPackageJson
@@ -278,9 +280,4 @@ export class TypesFetcher {
     deferred.resolve({result: content});
     return {result: content};
   }
-}
-
-interface NodePackage {
-  pkg: string;
-  path: string;
 }
