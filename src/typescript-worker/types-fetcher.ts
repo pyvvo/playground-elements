@@ -185,7 +185,6 @@ export class TypesFetcher {
           : undefined) ??
         'index.d.ts';
     } else {
-      // TODO(aomarks) Test coverage for this case.
       dtsPath = changeFileExtension(dtsPath, 'd.ts');
     }
     const dtsSpecifier = `${pkg}@${npm.version}/${dtsPath}`;

@@ -145,8 +145,10 @@ suite('typescript builder', () => {
       {
         name: 'index.ts',
         content: `
-          import {foo} from "foo";
-          foo(123);
+          import {strFn} from "foo";
+          import {numFn} from "foo/bar.js";
+          strFn(123);
+          numFn("str");
         `,
       },
     ];
@@ -159,10 +161,16 @@ suite('typescript builder', () => {
                 content: '{"main": "index.js"}',
               },
               'index.js': {
-                content: 'export const foo = (s) => s;',
+                content: 'export const strFn = (s) => s;',
+              },
+              'bar.js': {
+                content: 'export const numFn = (n) => n;',
               },
               'index.d.ts': {
-                content: 'export declare const foo: (s: string) => string;',
+                content: 'export declare const strFn: (s: string) => string;',
+              },
+              'bar.d.ts': {
+                content: 'export declare const numFn: (n: number) => number;',
               },
             },
           },
@@ -177,12 +185,33 @@ suite('typescript builder', () => {
             "Argument of type 'number' is not assignable to parameter of type 'string'.",
           range: {
             end: {
-              character: 17,
-              line: 2,
+              character: 19,
+              line: 3,
             },
             start: {
-              character: 14,
-              line: 2,
+              character: 16,
+              line: 3,
+            },
+          },
+          severity: 1,
+          source: 'typescript',
+        },
+        filename: 'index.ts',
+        kind: 'diagnostic',
+      },
+      {
+        diagnostic: {
+          code: 2345,
+          message:
+            "Argument of type 'string' is not assignable to parameter of type 'number'.",
+          range: {
+            end: {
+              character: 21,
+              line: 4,
+            },
+            start: {
+              character: 16,
+              line: 4,
             },
           },
           severity: 1,
@@ -196,7 +225,7 @@ suite('typescript builder', () => {
         file: {
           name: 'index.js',
           content:
-            'import { foo } from "./node_modules/foo@2.0.0/index.js";\r\nfoo(123);\r\n',
+            'import { strFn } from "./node_modules/foo@2.0.0/index.js";\r\nimport { numFn } from "./node_modules/foo@2.0.0/bar.js";\r\nstrFn(123);\r\nnumFn("str");\r\n',
           contentType: 'text/javascript',
         },
       },
@@ -204,7 +233,15 @@ suite('typescript builder', () => {
         kind: 'file',
         file: {
           name: 'node_modules/foo@2.0.0/index.js',
-          content: 'export const foo = (s) => s;',
+          content: 'export const strFn = (s) => s;',
+          contentType: 'text/javascript; charset=utf-8',
+        },
+      },
+      {
+        kind: 'file',
+        file: {
+          name: 'node_modules/foo@2.0.0/bar.js',
+          content: 'export const numFn = (n) => n;',
           contentType: 'text/javascript; charset=utf-8',
         },
       },
@@ -454,7 +491,7 @@ suite('typescript builder', () => {
     await checkTransform(files, expected, {}, cdn);
   });
 
-  test.only('finds typings from: typings, types, main, index.d.ts', async () => {
+  test('finds typings from: typings, types, main, index.d.ts', async () => {
     const wrong = {
       content: 'export type StringType = number;',
     };
