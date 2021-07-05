@@ -67,7 +67,7 @@ export class BareModuleTransformer {
         }
       }
     }
-    if (!packageJson.resolved) {
+    if (!packageJson.settled) {
       packageJson.resolve(undefined);
     }
   }
