@@ -9,11 +9,10 @@ import {ModuleResolver} from './module-resolver.js';
 import {Deferred} from '../shared/deferred.js';
 import {
   parseNpmStyleSpecifier,
-  fileExtension,
   changeFileExtension,
   classifySpecifier,
-  relativeUrlPath,
   NpmFileLocation,
+  resolveUrlPath,
 } from './util.js';
 
 import type {Result} from '../shared/util.js';
@@ -165,7 +164,6 @@ export class TypesFetcher {
     let packageJson: PackageJson | undefined = undefined;
     if (dtsPath === '') {
       try {
-        console.log(0);
         const res = await this._fetchAsset({
           pkg,
           version: npm.version,
@@ -174,7 +172,8 @@ export class TypesFetcher {
         if (res.error === undefined) {
           packageJson = JSON.parse(res.result) as PackageJson;
         }
-      } catch {
+      } catch (e) {
+        console.log('ERROR0', e);
         return;
       }
       dtsPath =
@@ -194,13 +193,13 @@ export class TypesFetcher {
     this._handledSpecifiers.add(dtsSpecifier);
     let dtsResult;
     try {
-      console.log(1);
       dtsResult = await this._fetchAsset({
         pkg,
         version: npm.version,
         path: dtsPath,
       });
-    } catch {
+    } catch (e) {
+      console.log('ERROR1', e);
       return;
     }
     if (dtsResult.error !== undefined) {
@@ -236,17 +235,8 @@ export class TypesFetcher {
     referrerSpecifier: NpmFileLocation,
     getPackageJson: () => Promise<PackageJson | undefined>
   ): Promise<void> {
-    const ext = fileExtension(relative);
-    if (ext === '') {
-      // No extension is presumed js.
-      relative += '.js';
-    } else if (ext !== 'js') {
-      // Unhandled kind of import.
-      return;
-    }
-    const jsPath = relativeUrlPath(referrerSpecifier.path, relative).slice(1); // Remove the leading '/'.
+    const jsPath = resolveUrlPath(referrerSpecifier.path, relative).slice(1); // Remove the leading '/'.
     const dtsPath = changeFileExtension(jsPath, 'd.ts');
-    console.log({jsPath, dtsPath});
     const dtsSpecifier = `${referrerSpecifier.pkg}/${dtsPath}`;
     if (this._handledSpecifiers.has(dtsSpecifier)) {
       return;
@@ -254,7 +244,6 @@ export class TypesFetcher {
     this._handledSpecifiers.add(dtsSpecifier);
     let dtsResult;
     try {
-      console.log(2);
       dtsResult = await this._fetchAsset({
         pkg: referrerSpecifier.pkg,
         version: referrerSpecifier.version,
@@ -289,7 +278,6 @@ export class TypesFetcher {
     this._specifierToFetchResult.set(specifier, deferred);
     let content;
     try {
-      console.log('dts fetch', location);
       const r = await this._cdn.fetch(location);
       content = r.content;
     } catch {

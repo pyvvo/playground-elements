@@ -536,6 +536,7 @@ suite('typescript builder', () => {
                   "main": "main.js"
                 }`,
               },
+              'typings.d.ts': wrong,
               'types.d.ts': {
                 content: 'export * from "c";',
               },

@@ -14,11 +14,10 @@ export interface CdnFile {
   contentType: string;
 }
 
-// TODO(aomarks) Add defers for file and version caching.
 export class CachingCdn {
   private readonly _urlPrefix: string;
   private readonly _versionCache = new Map<string, string>();
-  private readonly _fileCache = new Map<
+  private readonly _fetchCache = new Map<
     string,
     Deferred<{url: string; file: {content: string; contentType: string}}>
   >();
@@ -80,7 +79,7 @@ export class CachingCdn {
       }
     }
     let pvp = pkgVersionPath(location);
-    const cached = this._fileCache.get(pvp);
+    const cached = this._fetchCache.get(pvp);
     if (cached !== undefined) {
       return cached.promise;
     }
@@ -88,18 +87,20 @@ export class CachingCdn {
       url: string;
       file: {content: string; contentType: string};
     }>();
-    this._fileCache.set(pvp, deferred);
+    this._fetchCache.set(pvp, deferred);
     const url = this._urlPrefix + pvp;
+    console.log('fetch', url);
     const res = await fetch(url);
     const content = await res.text();
     if (res.status !== 200) {
-      // TODO(aomarks) Reject the deferred!
-      throw new Error(`Unpkg ${res.status} error: ${content}`);
+      const err = new Error(`Unpkg ${res.status} error: ${content}`);
+      deferred.reject(err);
+      throw err;
     }
     if (!exact) {
       const canonical = this._parseUnpkgUrl(res.url);
       this._versionCache.set(pkgVersion(location), canonical.version);
-      pvp = pkgVersionPath(canonical);
+      this._fetchCache.set(pkgVersionPath(canonical), deferred);
     }
     const result = {
       url: res.url,
