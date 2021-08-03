@@ -9,20 +9,29 @@ import {ModuleResolver} from './module-resolver.js';
 import {Deferred} from '../shared/deferred.js';
 import {
   parseNpmStyleSpecifier,
-  fileExtension,
   changeFileExtension,
   classifySpecifier,
   resolveUrlPath,
 } from './util.js';
 
 import type {Result} from '../shared/util.js';
+import type {CachingCdn} from './caching-cdn.js';
+import type {PackageJson, NpmFileLocation} from './util.js';
+import {
+  PackageDependencies,
+  DependencyGraph,
+  NodeModulesDirectory,
+  NodeModulesLayoutMaker,
+} from './node-modules-layout-maker.js';
 
 /**
  * Fetches typings for TypeScript imports and their transitive dependencies, and
  * for standard libraries.
  */
 export class TypesFetcher {
-  private readonly _moduleResolver: ModuleResolver;
+  private readonly _cdn: CachingCdn;
+  // TODO(aomarks) Apply this
+  protected readonly _importMapResolver: ModuleResolver;
   private readonly _entrypointTasks: Promise<void>[] = [];
   private readonly _handledSpecifiers = new Set<string>();
   private readonly _specifierToFetchResult = new Map<
@@ -30,8 +39,9 @@ export class TypesFetcher {
     Deferred<Result<string, number>>
   >();
 
-  constructor(moduleResolver: ModuleResolver) {
-    this._moduleResolver = moduleResolver;
+  constructor(cdn: CachingCdn, importMapResolver: ModuleResolver) {
+    this._cdn = cdn;
+    this._importMapResolver = importMapResolver;
   }
 
   /**
@@ -43,15 +53,22 @@ export class TypesFetcher {
    * be needed in order for TypeScript to type check this file. To access the
    * results, call {@link getTypings}.
    */
-  addBareModuleTypings(sourceText: string): void {
+  addBareModuleTypings(
+    sourceText: string,
+    getPackageJson: () => Promise<PackageJson | undefined>
+  ): void {
     const fileInfo = ts.preProcessFile(sourceText, undefined, true);
     for (const {fileName: specifier} of fileInfo.importedFiles) {
       if (classifySpecifier(specifier) === 'bare') {
-        this._entrypointTasks.push(this._handleBareSpecifier(specifier));
+        this._entrypointTasks.push(
+          this._handleBareSpecifier(specifier, null, getPackageJson)
+        );
       }
     }
     for (const {fileName: lib} of fileInfo.libReferenceDirectives) {
-      this._entrypointTasks.push(this._addLibTypings(lib));
+      this._entrypointTasks.push(
+        this._addLibTypings(lib, null, getPackageJson)
+      );
     }
   }
 
@@ -62,8 +79,11 @@ export class TypesFetcher {
    * This function returns immediately, but begins an asynchronous walk of the
    * <reference> graph. To access the results, await {@link getTypings}.
    */
-  addLibTypings(lib: string): void {
-    this._entrypointTasks.push(this._addLibTypings(lib));
+  addLibTypings(
+    lib: string,
+    getPackageJson: () => Promise<PackageJson | undefined>
+  ): void {
+    this._entrypointTasks.push(this._addLibTypings(lib, null, getPackageJson));
   }
 
   /**
@@ -76,7 +96,7 @@ export class TypesFetcher {
    */
   async getFiles(): Promise<Map<string, string>> {
     await Promise.all(this._entrypointTasks);
-    const files = new Map();
+    const filesByPv = new Map<string, Array<{path: string; content: string}>>();
     for (const [specifier, deferred] of this._specifierToFetchResult) {
       const fetched = await deferred.promise;
       if (fetched.error === undefined) {
@@ -86,167 +106,285 @@ export class TypesFetcher {
         // diagnostic on the bad import. So we don't actually need to do
         // anything special with errors (though we could potentially surface
         // more information).
-        files.set(specifier, fetched.result);
+        const {pkg, version, path} = parseNpmStyleSpecifier(specifier)!;
+        const pv = `${pkg}@${version}`;
+        let arr = filesByPv.get(pv);
+        if (arr === undefined) {
+          arr = [];
+          filesByPv.set(pv, arr);
+        }
+        arr.push({path, content: fetched.result});
       }
     }
-    return files;
+    const results = new Map<string, string>();
+    const layouter = new NodeModulesLayoutMaker();
+    const layout = layouter.layout(
+      this._rootDependencies,
+      this._dependencyGraph
+    );
+    this._buildFiles(filesByPv, layout, results, '');
+    return results;
   }
 
-  private async _addLibTypings(lib: string): Promise<void> {
+  private _buildFiles(
+    filesByPv: Map<string, Array<{path: string; content: string}>>,
+    layout: NodeModulesDirectory,
+    results: Map<string, string>,
+    prefix: string
+  ): void {
+    if (prefix !== '') {
+      prefix = prefix + '/';
+    }
+    for (const [pkg, {version, nodeModules: nested}] of Object.entries(
+      layout
+    )) {
+      const pv = `${pkg}@${version}`;
+      const files = filesByPv.get(pv) ?? [];
+      for (const file of files) {
+        const path = `${prefix}${pkg}/${file.path}`;
+        results.set(path, file.content);
+      }
+      this._buildFiles(
+        filesByPv,
+        nested,
+        results,
+        `${prefix}${pkg}/node_modules`
+      );
+    }
+  }
+
+  private async _addLibTypings(
+    lib: string,
+    referrerSpecifier: NpmFileLocation | null,
+    getPackageJson: () => Promise<PackageJson | undefined>
+  ): Promise<void> {
     await this._handleBareSpecifier(
-      `typescript/lib/lib.${lib.toLowerCase()}.js`
+      `typescript/lib/lib.${lib.toLowerCase()}.js`,
+      referrerSpecifier,
+      getPackageJson
     );
   }
 
   private async _handleBareAndRelativeSpecifiers(
     sourceText: string,
-    referrerSpecifier: NodePackage
+    referrerSpecifier: NpmFileLocation | null,
+    getPackageJson: () => Promise<PackageJson | undefined>
   ): Promise<void> {
-    const fileInfo = ts.preProcessFile(sourceText, undefined, true);
+    const fileInfo = ts.preProcessFile(sourceText, true, false);
     const promises = [];
     for (const {fileName: specifier} of fileInfo.importedFiles) {
       const kind = classifySpecifier(specifier);
       if (kind === 'bare') {
-        promises.push(this._handleBareSpecifier(specifier));
+        promises.push(
+          this._handleBareSpecifier(
+            specifier,
+            referrerSpecifier,
+            getPackageJson
+          )
+        );
       } else if (kind === 'relative') {
         promises.push(
-          this._handleRelativeSpecifier(specifier, referrerSpecifier)
+          this._handleRelativeSpecifier(
+            specifier,
+            referrerSpecifier,
+            getPackageJson
+          )
         );
       }
     }
     for (const {fileName: lib} of fileInfo.libReferenceDirectives) {
-      promises.push(this.addLibTypings(lib));
+      promises.push(this.addLibTypings(lib, getPackageJson));
     }
     await Promise.all(promises);
   }
 
-  private async _handleBareSpecifier(bare: string): Promise<void> {
-    if (this._handledSpecifiers.has(bare)) {
-      return;
-    }
-    this._handledSpecifiers.add(bare);
+  private async _handleBareSpecifier(
+    bare: string,
+    referrerSpecifier: NpmFileLocation | null,
+    getPackageJson: () => Promise<PackageJson | undefined>
+  ): Promise<void> {
     const npm = parseNpmStyleSpecifier(bare);
     if (npm === undefined) {
       return;
     }
-    const pkg = npm.pkg;
-    // If there's no path, we need to discover the main module.
-    let jsPath = npm.path;
-    if (jsPath === '') {
-      const packageJson = await this._fetchPackageJson(pkg);
-      if (packageJson.error !== undefined) {
-        return;
-      }
-      jsPath = packageJson.result.main ?? 'index.js';
+    if (!npm.version) {
+      npm.version =
+        (await getPackageJson())?.dependencies?.[npm.pkg] ?? 'latest';
     }
-    const ext = fileExtension(jsPath);
-    if (ext === '') {
-      // No extension is presumed js.
-      jsPath += '.js';
-    } else if (ext !== 'js') {
-      // Unhandled kind of import.
+    const pkg = npm.pkg;
+    const key = `${pkg}@${npm.version}/${npm.path}`;
+    if (this._handledSpecifiers.has(key)) {
       return;
     }
-    const dtsPath = changeFileExtension(jsPath, 'd.ts');
-    const dtsSpecifier = `${pkg}/${dtsPath}`;
+    this._handledSpecifiers.add(key);
+    // If there's no path, we need to discover the main module.
+    let dtsPath = npm.path;
+    let packageJson: PackageJson | undefined = undefined;
+    if (dtsPath === '') {
+      try {
+        const res = await this._fetchAndAddToOutputFiles(
+          {
+            pkg,
+            version: npm.version,
+            path: 'package.json',
+          },
+          referrerSpecifier
+        );
+        if (res.error === undefined) {
+          packageJson = JSON.parse(res.result) as PackageJson;
+        }
+      } catch (e) {
+        return;
+      }
+      dtsPath =
+        packageJson?.typings ??
+        packageJson?.types ??
+        (packageJson?.main !== undefined
+          ? changeFileExtension(packageJson.main, 'd.ts')
+          : undefined) ??
+        'index.d.ts';
+    } else {
+      dtsPath = changeFileExtension(dtsPath, 'd.ts');
+    }
+    const dtsSpecifier = `${pkg}@${npm.version}/${dtsPath}`;
     if (this._handledSpecifiers.has(dtsSpecifier)) {
       return;
     }
     this._handledSpecifiers.add(dtsSpecifier);
-    const dtsResult = await this._fetchAsset(dtsSpecifier);
+    let dtsResult;
+    try {
+      dtsResult = await this._fetchAndAddToOutputFiles(
+        {
+          pkg,
+          version: npm.version,
+          path: dtsPath,
+        },
+        referrerSpecifier
+      );
+    } catch (e) {
+      return;
+    }
     if (dtsResult.error !== undefined) {
       return;
     }
-    await this._handleBareAndRelativeSpecifiers(dtsResult.result, {
-      pkg,
-      path: jsPath,
-    });
-  }
-
-  private _resolveBareModule(bare: string): string {
-    const result = this._moduleResolver.resolve(bare, '');
-    if (result.type !== 'bare') {
-      throw new Error(`Only expected bare module for specifier ${bare}`);
-    }
-    return result.url;
+    let packageJson2: PackageJson | undefined | null = null;
+    const getPackageJson2 = async (): Promise<PackageJson | undefined> => {
+      if (packageJson2 === null) {
+        try {
+          packageJson2 = await this._cdn.fetchPackageJson({
+            pkg,
+            version: npm.version,
+          });
+        } catch {
+          packageJson2 = undefined;
+        }
+      }
+      return packageJson2;
+    };
+    await this._handleBareAndRelativeSpecifiers(
+      dtsResult.result,
+      {
+        pkg,
+        version: npm.version,
+        path: dtsPath,
+      },
+      getPackageJson2
+    );
   }
 
   private async _handleRelativeSpecifier(
     relative: string,
-    referrerSpecifier: NodePackage
+    referrerSpecifier: NpmFileLocation | null,
+    getPackageJson: () => Promise<PackageJson | undefined>
   ): Promise<void> {
-    const ext = fileExtension(relative);
-    if (ext === '') {
-      // No extension is presumed js.
-      relative += '.js';
-    } else if (ext !== 'js') {
-      // Unhandled kind of import.
-      return;
-    }
-    const jsPath = resolveUrlPath(referrerSpecifier.path, relative).slice(1); // Remove the leading '/'.
+    const jsPath = resolveUrlPath(referrerSpecifier!.path, relative).slice(1); // Remove the leading '/'.
     const dtsPath = changeFileExtension(jsPath, 'd.ts');
-    const dtsSpecifier = `${referrerSpecifier.pkg}/${dtsPath}`;
+    const dtsSpecifier = `${referrerSpecifier!.pkg}/${dtsPath}`;
     if (this._handledSpecifiers.has(dtsSpecifier)) {
       return;
     }
     this._handledSpecifiers.add(dtsSpecifier);
-    const dtsResult = await this._fetchAsset(dtsSpecifier);
+    let dtsResult;
+    try {
+      dtsResult = await this._fetchAndAddToOutputFiles(
+        {
+          pkg: referrerSpecifier!.pkg,
+          version: referrerSpecifier!.version,
+          path: dtsPath,
+        },
+        referrerSpecifier
+      );
+    } catch {
+      return;
+    }
     if (dtsResult.error !== undefined) {
       return;
     }
-    await this._handleBareAndRelativeSpecifiers(dtsResult.result, {
-      pkg: referrerSpecifier.pkg,
-      path: jsPath,
-    });
+    await this._handleBareAndRelativeSpecifiers(
+      dtsResult.result,
+      {
+        pkg: referrerSpecifier!.pkg,
+        version: referrerSpecifier!.version,
+        path: dtsPath,
+      },
+      getPackageJson
+    );
   }
 
-  private async _fetchAsset(
-    specifier: string
+  private async _fetchAndAddToOutputFiles(
+    location: NpmFileLocation,
+    referrerSpecifier: NpmFileLocation | null
   ): Promise<Result<string, number>> {
+    location = await this._cdn.canonicalize(location);
+    if (referrerSpecifier !== null) {
+      referrerSpecifier = await this._cdn.canonicalize(referrerSpecifier);
+    }
+    const specifier = `${location.pkg}@${location.version}/${location.path}`;
     let deferred = this._specifierToFetchResult.get(specifier);
     if (deferred !== undefined) {
       return deferred.promise;
     }
+
+    this._addDependency(referrerSpecifier, location);
     deferred = new Deferred();
     this._specifierToFetchResult.set(specifier, deferred);
-
-    let url = this._resolveBareModule(specifier);
-    // It's common to have a module resolver that resolves to unpkg.com URLs
-    // with the ?module parameter. But ?module mode errors on .d.ts files and
-    // package.json files (anything other than .js and .html), so we have to
-    // remove that here.
-    const urlObj = new URL(url);
-    if (urlObj.host === 'unpkg.com' && urlObj.searchParams.has('module')) {
-      urlObj.searchParams.delete('module');
-      url = urlObj.href;
+    let content;
+    try {
+      const r = await this._cdn.fetch(location);
+      content = r.content;
+    } catch {
+      const err = {error: 404};
+      deferred.resolve(err);
+      return err;
     }
-    const resp = await fetch(url);
-    let result: Result<string, number>;
-    if (resp.status === 200) {
-      result = {result: await resp.text()};
+    deferred.resolve({result: content});
+    return {result: content};
+  }
+
+  private readonly _rootDependencies: PackageDependencies = {};
+  private readonly _dependencyGraph: DependencyGraph = {};
+
+  /**
+   * Record that a package depends on another package.
+   */
+  private async _addDependency(
+    from: {pkg: string; version: string} | null,
+    to: {pkg: string; version: string}
+  ) {
+    if (from === null) {
+      this._rootDependencies[to.pkg] = to.version;
     } else {
-      result = {error: resp.status};
+      let fromVersions = this._dependencyGraph[from.pkg];
+      if (fromVersions === undefined) {
+        fromVersions = {};
+        this._dependencyGraph[from.pkg] = fromVersions;
+      }
+      let deps = fromVersions[from.version];
+      if (deps === undefined) {
+        deps = {};
+        fromVersions[from.version] = deps;
+      }
+      deps[to.pkg] = to.version;
     }
-    deferred.resolve(result);
-    return result;
   }
-
-  private async _fetchPackageJson(
-    pkg: string
-  ): Promise<Result<PackageJson, number>> {
-    const result = await this._fetchAsset(`${pkg}/package.json`);
-    if (result.error !== undefined) {
-      return result;
-    }
-    return {result: JSON.parse(result.result) as PackageJson};
-  }
-}
-
-interface PackageJson {
-  main?: string;
-}
-
-interface NodePackage {
-  pkg: string;
-  path: string;
 }
